@@ -1,0 +1,36 @@
+{
+  "name": "@nowpayments-sdk/node",
+  "version": "0.1.0",
+  "description": "Scenario-first Node.js SDK for NOWPayments hosted checkout and crypto payments.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.js",
+    "prepack": "npm run build && npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "nowpayments",
+    "payments",
+    "crypto",
+    "sdk",
+    "checkout",
+    "nodejs"
+  ],
+  "license": "MIT"
+}
