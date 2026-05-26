@@ -1,19 +1,12 @@
 import { NowPaymentsSDK } from '../src/index.js';
 
-// /v1/auth needs dashboard credentials, not an API key.
-const authSdk = new NowPaymentsSDK({
-  email: process.env.NOWPAYMENTS_EMAIL,
-  password: process.env.NOWPAYMENTS_PASSWORD
-});
-
-const token = await authSdk.authenticate();
-console.log('JWT token:', token);
-console.log('JWT token from SDK instance:', authSdk.jwtToken);
-
-// /v1/payment/ list needs both x-api-key and Bearer JWT.
+// Bearer JWT is handled under the hood when email + password are provided.
+// The first Bearer-protected request authenticates automatically, then the SDK
+// caches the JWT in memory and refreshes it when it expires.
 const sdk = new NowPaymentsSDK({
   apiKey: process.env.NOWPAYMENTS_API_KEY,
-  jwtToken: authSdk.jwtToken
+  email: process.env.NOWPAYMENTS_EMAIL,
+  password: process.env.NOWPAYMENTS_PASSWORD
 });
 
 const payments = await sdk.listPayments({
@@ -24,3 +17,6 @@ const payments = await sdk.listPayments({
 });
 
 console.log('Payments:', payments.data);
+
+// Optional: the cached token is still available for debugging/advanced flows.
+console.log('Cached JWT token:', sdk.jwtToken);

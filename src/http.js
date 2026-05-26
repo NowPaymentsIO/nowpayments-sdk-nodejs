@@ -53,14 +53,13 @@ async function readResponseBody(response) {
 }
 
 export class HttpClient {
-  constructor({ apiKey, baseUrl, timeoutMs = 30000, fetchImpl, userAgent, getJwtToken, autoAuthenticate } = {}) {
+  constructor({ apiKey, baseUrl, timeoutMs = 30000, fetchImpl, userAgent, getJwtToken } = {}) {
     this.apiKey = apiKey;
     this.baseUrl = (baseUrl || 'https://api.nowpayments.io').replace(/\/$/, '');
     this.timeoutMs = timeoutMs;
     this.fetchImpl = fetchImpl || globalThis.fetch;
-    this.userAgent = userAgent || '@nowpayments-sdk/node/0.1.1';
+    this.userAgent = userAgent || '@nowpayments-sdk/node/0.2.1';
     this.getJwtToken = getJwtToken;
-    this.autoAuthenticate = autoAuthenticate;
 
     if (typeof this.fetchImpl !== 'function') {
       throw new NetworkError('No fetch implementation is available. Use Node.js >= 18 or pass { fetch } to the SDK constructor.', {
@@ -82,52 +81,61 @@ export class HttpClient {
     if (apiKey) assertConfiguredApiKey(this.apiKey);
 
     const url = this.buildUrl(path, query);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs ?? this.timeoutMs);
 
-    const requestHeaders = compactObject({
-      accept: 'application/json',
-      'content-type': body === undefined ? undefined : 'application/json',
-      'user-agent': this.userAgent,
-      'x-api-key': apiKey ? this.apiKey : undefined,
-      ...headers
-    });
-
-    if (bearer) {
-      let token = this.getJwtToken?.();
-      if (!token && this.autoAuthenticate) {
-        token = await this.autoAuthenticate();
+    const makeHeaders = async ({ forceRefreshJwt = false } = {}) => {
+      let token = null;
+      if (bearer) {
+        token = await this.getJwtToken?.({ forceRefresh: forceRefreshJwt });
       }
-      if (token) requestHeaders.authorization = `Bearer ${token}`;
-    }
 
-    let response;
-    try {
-      response = await this.fetchImpl(url, {
-        method,
-        headers: requestHeaders,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal
+      return compactObject({
+        accept: 'application/json',
+        'content-type': body === undefined ? undefined : 'application/json',
+        'user-agent': this.userAgent,
+        'x-api-key': apiKey ? this.apiKey : undefined,
+        authorization: bearer && token ? `Bearer ${token}` : undefined,
+        ...headers
       });
-    } catch (error) {
-      clearTimeout(timeout);
-      if (error?.name === 'AbortError') {
-        throw new NetworkError('Payment API request timed out.', {
-          type: 'timeout',
-          code: 'REQUEST_TIMEOUT',
-          details: { path, timeoutMs: timeoutMs ?? this.timeoutMs },
+    };
+
+    const execute = async ({ forceRefreshJwt = false } = {}) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs ?? this.timeoutMs);
+
+      try {
+        return await this.fetchImpl(url, {
+          method,
+          headers: await makeHeaders({ forceRefreshJwt }),
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: controller.signal
+        });
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw new NetworkError('Payment API request timed out.', {
+            type: 'timeout',
+            code: 'REQUEST_TIMEOUT',
+            details: { path, timeoutMs: timeoutMs ?? this.timeoutMs },
+            cause: error
+          });
+        }
+        throw new NetworkError('Network error while calling payment API.', {
+          code: 'NETWORK_ERROR',
+          details: { path },
           cause: error
         });
+      } finally {
+        clearTimeout(timeout);
       }
-      throw new NetworkError('Network error while calling payment API.', {
-        code: 'NETWORK_ERROR',
-        details: { path },
-        cause: error
-      });
+    };
+
+    let response = await execute();
+    let responseBody = await readResponseBody(response);
+
+    if (!response.ok && bearer && response.status === 401 && this.getJwtToken) {
+      response = await execute({ forceRefreshJwt: true });
+      responseBody = await readResponseBody(response);
     }
 
-    clearTimeout(timeout);
-    const responseBody = await readResponseBody(response);
     if (!response.ok) {
       throw new APIError(extractApiErrorMessage(responseBody, response.status), {
         code: 'API_REQUEST_FAILED',

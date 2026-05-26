@@ -116,34 +116,20 @@ console.log(payment.status);       // SDK status: 'pending'
 
 ---
 
-## Authentication
+## Authentication and automatic JWT refresh
 
-`POST /v1/auth` requires dashboard email and password and returns a short-lived JWT token. It does **not** require an API key.
+Some NOWPayments endpoints, for example `GET /v1/payment/`, require both `x-api-key` and a Bearer JWT. `POST /v1/auth` returns this JWT from dashboard `email` + `password`; the token is short-lived, so the SDK now keeps this work under the hood.
+
+Pass `apiKey`, `email`, and `password` to one SDK instance. The first Bearer-protected call automatically obtains a JWT, stores it in memory, reuses it while it is valid, and refreshes it when the token is expired or when the API responds with `401 Unauthorized`.
 
 ```js
-const authSdk = new NowPaymentsSDK({
+const sdk = new NowPaymentsSDK({
+  apiKey: process.env.NOWPAYMENTS_API_KEY,
   email: process.env.NOWPAYMENTS_EMAIL,
   password: process.env.NOWPAYMENTS_PASSWORD
 });
 
-const token = await authSdk.authenticate();
-console.log(token);             // JWT string
-console.log(authSdk.jwtToken);  // same, stored on instance
-```
-
----
-
-## List payments
-
-`GET /v1/payment/` requires both `x-api-key` and a Bearer JWT token.
-
-```js
-// Option A: pass jwtToken directly
-const sdk = new NowPaymentsSDK({
-  apiKey: process.env.NOWPAYMENTS_API_KEY,
-  jwtToken: process.env.NOWPAYMENTS_JWT_TOKEN
-});
-
+// No manual sdk.authenticate() and no manual jwtToken plumbing are needed.
 const payments = await sdk.listPayments({
   limit: 20,
   page: 0,
@@ -155,21 +141,18 @@ console.log(payments.data);       // array of Payment objects
 console.log(payments.pagesCount); // total pages
 ```
 
-```js
-// Option B: authenticate first, then reuse the token
-const authSdk = new NowPaymentsSDK({
-  email: process.env.NOWPAYMENTS_EMAIL,
-  password: process.env.NOWPAYMENTS_PASSWORD
-});
-await authSdk.authenticate();
+Manual token mode is still supported for advanced use cases:
 
+```js
 const sdk = new NowPaymentsSDK({
   apiKey: process.env.NOWPAYMENTS_API_KEY,
-  jwtToken: authSdk.jwtToken
+  jwtToken: process.env.NOWPAYMENTS_JWT_TOKEN
 });
 
-const payments = await sdk.listPayments({ limit: 20, sortBy: 'created_at', orderBy: 'desc' });
+const payments = await sdk.listPayments({ limit: 20 });
 ```
+
+You can still call `await sdk.authenticate()` explicitly if you need to inspect `sdk.jwtToken`, but application code normally should not need to pass JWTs between SDK instances anymore.
 
 `sortBy` is the field name (e.g. `created_at`, `payment_id`). `orderBy` is `asc` or `desc` only. Snake-case aliases (`sort_by`, `order_by`) are accepted and normalized automatically.
 

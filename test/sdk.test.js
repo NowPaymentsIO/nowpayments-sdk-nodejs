@@ -15,6 +15,12 @@ function jsonResponse(body, status = 200) {
   });
 }
 
+
+function fakeJwt(expiresAtSeconds, extraPayload = {}) {
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ ...extraPayload, exp: expiresAtSeconds })}.signature`;
+}
+
 function createMockFetch(handler) {
   const calls = [];
   const fetch = async (url, init = {}) => {
@@ -375,4 +381,149 @@ test('preflightPayment does not send fiatEquivalent as a currency code', async (
 
   const sdk = new NowPaymentsSDK({ apiKey: 'test-key', fetch });
   await sdk.createCheckout({ amount: 50, currency: 'usd', payCurrency: 'eth' });
+});
+
+
+test('listPayments automatically authenticates once and reuses cached JWT', async () => {
+  const token = fakeJwt(Math.floor(Date.now() / 1000) + 300);
+  let authCalls = 0;
+  let listCalls = 0;
+
+  const fetch = createMockFetch(({ url, init }) => {
+    if (url.pathname === '/v1/auth') {
+      authCalls += 1;
+      assert.equal(init.method, 'POST');
+      assert.deepEqual(JSON.parse(init.body), { email: 'merchant@example.com', password: 'secret' });
+      return jsonResponse({ token });
+    }
+
+    if (url.pathname === '/v1/payment/') {
+      listCalls += 1;
+      assert.equal(init.headers.authorization, `Bearer ${token}`);
+      return jsonResponse({ data: [], limit: 20, page: 0, pagesCount: 0, total: 0 });
+    }
+
+    throw new Error(`Unexpected route ${url.pathname}`);
+  });
+
+  const sdk = new NowPaymentsSDK({
+    apiKey: 'test-key',
+    email: 'merchant@example.com',
+    password: 'secret',
+    fetch
+  });
+
+  await sdk.listPayments({ limit: 20 });
+  await sdk.listPayments({ limit: 20 });
+
+  assert.equal(authCalls, 1);
+  assert.equal(listCalls, 2);
+  assert.equal(sdk.jwtToken, token);
+});
+
+test('listPayments refreshes JWT before request when cached token is expired', async () => {
+  const expiredToken = fakeJwt(Math.floor(Date.now() / 1000) - 60);
+  const freshToken = fakeJwt(Math.floor(Date.now() / 1000) + 300);
+
+  const fetch = createMockFetch(({ url, init }, calls) => {
+    if (url.pathname === '/v1/auth') {
+      assert.equal(calls.length, 1, 'expired token should trigger auth before payment list request');
+      return jsonResponse({ token: freshToken });
+    }
+
+    if (url.pathname === '/v1/payment/') {
+      assert.equal(init.headers.authorization, `Bearer ${freshToken}`);
+      return jsonResponse({ data: [], limit: 10, page: 0, pagesCount: 0, total: 0 });
+    }
+
+    throw new Error(`Unexpected route ${url.pathname}`);
+  });
+
+  const sdk = new NowPaymentsSDK({
+    apiKey: 'test-key',
+    email: 'merchant@example.com',
+    password: 'secret',
+    jwtToken: expiredToken,
+    fetch
+  });
+
+  await sdk.listPayments({ limit: 10 });
+
+  assert.equal(fetch.calls[0].url.pathname, '/v1/auth');
+  assert.equal(fetch.calls[1].url.pathname, '/v1/payment/');
+  assert.equal(sdk.jwtToken, freshToken);
+});
+
+test('Bearer requests retry once with refreshed JWT after 401', async () => {
+  const oldToken = fakeJwt(Math.floor(Date.now() / 1000) + 300, { token: 'old' });
+  const freshToken = fakeJwt(Math.floor(Date.now() / 1000) + 300, { token: 'fresh' });
+  let paymentListCalls = 0;
+
+  const fetch = createMockFetch(({ url, init }) => {
+    if (url.pathname === '/v1/payment/') {
+      paymentListCalls += 1;
+      if (paymentListCalls === 1) {
+        assert.equal(init.headers.authorization, `Bearer ${oldToken}`);
+        return jsonResponse({ message: 'Unauthorized' }, 401);
+      }
+      assert.equal(init.headers.authorization, `Bearer ${freshToken}`);
+      return jsonResponse({ data: [], limit: 1, page: 0, pagesCount: 0, total: 0 });
+    }
+
+    if (url.pathname === '/v1/auth') {
+      return jsonResponse({ token: freshToken });
+    }
+
+    throw new Error(`Unexpected route ${url.pathname}`);
+  });
+
+  const sdk = new NowPaymentsSDK({
+    apiKey: 'test-key',
+    email: 'merchant@example.com',
+    password: 'secret',
+    jwtToken: oldToken,
+    fetch
+  });
+
+  await sdk.listPayments({ limit: 1 });
+
+  assert.equal(paymentListCalls, 2);
+  assert.deepEqual(fetch.calls.map((call) => call.url.pathname), ['/v1/payment/', '/v1/auth', '/v1/payment/']);
+  assert.equal(sdk.jwtToken, freshToken);
+});
+
+test('parallel Bearer requests share a single automatic auth request', async () => {
+  const token = fakeJwt(Math.floor(Date.now() / 1000) + 300);
+  let authCalls = 0;
+
+  const fetch = createMockFetch(async ({ url, init }) => {
+    if (url.pathname === '/v1/auth') {
+      authCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return jsonResponse({ token });
+    }
+
+    if (url.pathname === '/v1/payment/') {
+      assert.equal(init.headers.authorization, `Bearer ${token}`);
+      return jsonResponse({ data: [], limit: 1, page: 0, pagesCount: 0, total: 0 });
+    }
+
+    throw new Error(`Unexpected route ${url.pathname}`);
+  });
+
+  const sdk = new NowPaymentsSDK({
+    apiKey: 'test-key',
+    email: 'merchant@example.com',
+    password: 'secret',
+    fetch
+  });
+
+  await Promise.all([
+    sdk.listPayments({ limit: 1 }),
+    sdk.listPayments({ limit: 1 }),
+    sdk.listPayments({ limit: 1 })
+  ]);
+
+  assert.equal(authCalls, 1);
+  assert.equal(fetch.calls.filter((call) => call.url.pathname === '/v1/payment/').length, 3);
 });

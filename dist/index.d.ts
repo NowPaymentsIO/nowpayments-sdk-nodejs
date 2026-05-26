@@ -52,8 +52,16 @@ export interface NowPaymentsSDKOptions {
   ipnSecret?: string;
   jwtToken?: string;
   token?: string;
+  /** Dashboard email. When paired with password, JWT is obtained and refreshed automatically for Bearer-protected endpoints. */
   email?: string;
+  /** Dashboard password. When paired with email, JWT is cached in memory and refreshed automatically. */
   password?: string;
+  /** Refresh JWT this many milliseconds before exp. Default: 30000. */
+  jwtRefreshSkewMs?: number;
+  /** Refresh JWT this many seconds before exp. Used only when jwtRefreshSkewMs is not set. */
+  jwtRefreshSkewSeconds?: number;
+  /** Fallback in-memory TTL for auth responses whose JWT cannot be decoded. Default: 240000. */
+  jwtFallbackTtlMs?: number;
   baseUrl?: string;
   timeoutMs?: number;
   userAgent?: string;
@@ -348,8 +356,13 @@ export interface RawClient {
 export class NowPaymentsSDK {
   raw: RawClient;
   jwtToken: string | null;
+  jwtExpiresAt: number | null;
   constructor(options?: NowPaymentsSDKOptions);
   setJwtToken(token: string | null): this;
+  isJwtTokenExpired(now?: number): boolean;
+  hasAuthCredentials(): boolean;
+  getJwtToken(options?: { forceRefresh?: boolean }): Promise<string | null>;
+  refreshJwtToken(): Promise<string | null>;
   getApiStatus(): Promise<unknown>;
   authenticate(credentials?: { email?: string; password?: string }): Promise<string | null>;
   estimatePrice(input: EstimateInput): Promise<Estimate>;

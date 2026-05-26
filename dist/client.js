@@ -1,5 +1,5 @@
 import { HttpClient } from './http.js';
-import { ValidationError } from './errors.js';
+import { APIError, ValidationError } from './errors.js';
 import {
   normalizeCheckoutSession,
   normalizeCurrencies,
@@ -21,6 +21,39 @@ import {
   validatePaymentId,
   validatePaymentsListQuery
 } from './validators.js';
+
+
+const DEFAULT_JWT_REFRESH_SKEW_MS = 30_000;
+const DEFAULT_JWT_FALLBACK_TTL_MS = 4 * 60 * 1000;
+
+function base64UrlDecode(value) {
+  const normalized = String(value).replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
+  return Buffer.from(padded, 'base64').toString('utf8');
+}
+
+function getJwtExpiresAtMs(token) {
+  if (typeof token !== 'string' || !token.includes('.')) return null;
+  const [, payload] = token.split('.');
+  if (!payload) return null;
+
+  try {
+    const decoded = JSON.parse(base64UrlDecode(payload));
+    if (typeof decoded.exp !== 'number' || !Number.isFinite(decoded.exp)) return null;
+    return decoded.exp * 1000;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRefreshSkewMs(options = {}) {
+  const value = options.jwtRefreshSkewMs ?? (
+    options.jwtRefreshSkewSeconds == null ? undefined : Number(options.jwtRefreshSkewSeconds) * 1000
+  );
+  if (value == null) return DEFAULT_JWT_REFRESH_SKEW_MS;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : DEFAULT_JWT_REFRESH_SKEW_MS;
+}
 
 function toApiBoolean(value) {
   if (value === undefined || value === null) return undefined;
@@ -77,7 +110,13 @@ export class NowPaymentsSDK {
   constructor(options = {}) {
     this.apiKey = options.apiKey;
     this.ipnSecret = options.ipnSecret;
-    this.jwtToken = options.jwtToken ?? options.token ?? null;
+    this.jwtToken = null;
+    this.jwtExpiresAt = null;
+    this.jwtRefreshSkewMs = normalizeRefreshSkewMs(options);
+    this.jwtFallbackTtlMs = Number.isFinite(Number(options.jwtFallbackTtlMs)) && Number(options.jwtFallbackTtlMs) > 0
+      ? Number(options.jwtFallbackTtlMs)
+      : DEFAULT_JWT_FALLBACK_TTL_MS;
+    this.authPromise = null;
     this.email = options.email;
     this.password = options.password;
     this.defaultIpnCallbackUrl = options.ipnCallbackUrl;
@@ -85,14 +124,15 @@ export class NowPaymentsSDK {
     this.defaultCancelUrl = options.cancelUrl;
     this.defaultPartiallyPaidUrl = options.partiallyPaidUrl;
 
+    this.setJwtToken(options.jwtToken ?? options.token ?? null);
+
     this.http = new HttpClient({
       apiKey: this.apiKey,
       baseUrl: options.baseUrl,
       timeoutMs: options.timeoutMs,
       fetchImpl: options.fetch,
       userAgent: options.userAgent,
-      getJwtToken: () => this.jwtToken,
-      autoAuthenticate: this.email && this.password ? () => this.authenticate() : undefined
+      getJwtToken: (jwtOptions) => this.getJwtToken(jwtOptions)
     });
 
     this.raw = this.createRawClient();
@@ -133,7 +173,65 @@ export class NowPaymentsSDK {
 
   setJwtToken(token) {
     this.jwtToken = token || null;
+    this.jwtExpiresAt = getJwtExpiresAtMs(this.jwtToken);
     return this;
+  }
+
+  isJwtTokenExpired(now = Date.now()) {
+    if (!this.jwtToken) return true;
+    if (!this.jwtExpiresAt) return false;
+    return this.jwtExpiresAt <= now + this.jwtRefreshSkewMs;
+  }
+
+  hasAuthCredentials() {
+    return Boolean(this.email && this.password);
+  }
+
+  async getJwtToken(options = {}) {
+    const forceRefresh = Boolean(options.forceRefresh);
+
+    if (!forceRefresh && this.jwtToken && !this.isJwtTokenExpired()) {
+      return this.jwtToken;
+    }
+
+    if (!this.hasAuthCredentials()) {
+      return this.jwtToken;
+    }
+
+    return this.refreshJwtToken();
+  }
+
+  async refreshJwtToken() {
+    if (!this.hasAuthCredentials()) {
+      throw new ValidationError('email and password are required for automatic JWT authentication.', {
+        code: 'MISSING_AUTH_CREDENTIALS'
+      });
+    }
+
+    if (this.authPromise) return this.authPromise;
+
+    this.authPromise = (async () => {
+      const response = await this.raw.authenticate({ email: this.email, password: this.password });
+      const token = response?.token;
+      if (typeof token !== 'string' || token.length === 0) {
+        throw new APIError('Authentication response did not include a JWT token.', {
+          code: 'INVALID_AUTH_RESPONSE',
+          details: response
+        });
+      }
+
+      this.setJwtToken(token);
+      if (!this.jwtExpiresAt) {
+        this.jwtExpiresAt = Date.now() + this.jwtFallbackTtlMs;
+      }
+      return this.jwtToken;
+    })();
+
+    try {
+      return await this.authPromise;
+    } finally {
+      this.authPromise = null;
+    }
   }
 
   async getApiStatus() {
@@ -149,9 +247,9 @@ export class NowPaymentsSDK {
       });
     }
 
-    const response = await this.raw.authenticate({ email, password });
-    this.jwtToken = response?.token ?? null;
-    return this.jwtToken;
+    this.email = email;
+    this.password = password;
+    return this.refreshJwtToken();
   }
 
   async estimatePrice(input) {
