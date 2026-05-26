@@ -291,7 +291,7 @@ export function normalizePaymentsList(api = {}) {
     data,
     limit: toNumberOrNull(api.limit),
     page: toNumberOrNull(api.page),
-    pagesCount: toNumberOrNull(api.pagesCount),
+    pagesCount: toNumberOrNull(api.pagesCount ?? api.pages_count),
     total: toNumberOrNull(api.total)
   };
 

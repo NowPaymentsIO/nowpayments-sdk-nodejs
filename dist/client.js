@@ -108,7 +108,10 @@ export class NowPaymentsSDK {
       }),
       getEstimatedPrice: (query) => this.http.request('/v1/estimate', { query }),
       getMinimumPaymentAmount: (query) => this.http.request('/v1/min-amount', { query }),
+      getCurrencies: (query) => this.http.request('/v1/currencies', { query }),
       getFullCurrencies: () => this.http.request('/v1/full-currencies'),
+      getMerchantCoins: () => this.http.request('/v1/merchant/coins'),
+      getBalance: () => this.http.request('/v1/balance'),
       createInvoice: (body) => this.http.request('/v1/invoice', { method: 'POST', body }),
       createPayment: (body, options = {}) => this.http.request('/v1/payment', {
         method: 'POST',
@@ -177,7 +180,27 @@ export class NowPaymentsSDK {
     const response = await this.raw.getFullCurrencies();
     const currencies = normalizeCurrencies(response);
     if (options.onlyEnabled === false) return currencies;
-    return currencies.filter((currency) => currency.enabled !== false);
+    // Explicit check for true: currency.enabled can be null for string-only entries.
+    return currencies.filter((c) => c.enabled === true || c.enable === true);
+  }
+
+  /**
+   * Returns currencies available for fixed-rate payments.
+   * Backed by GET /v1/currencies?fixed_rate=true.
+   * For the full enriched list, use getAvailableCurrencies().
+   */
+  async getFixedRateCurrencies() {
+    const response = await this.raw.getCurrencies({ fixed_rate: true });
+    return normalizeCurrencies(response);
+  }
+
+  /**
+   * Returns only the currencies enabled for this specific merchant account.
+   * Backed by GET /v1/merchant/coins.
+   */
+  async getMerchantCurrencies() {
+    const response = await this.raw.getMerchantCoins();
+    return normalizeCurrencies(response);
   }
 
   async createInvoice(input) {
@@ -224,11 +247,9 @@ export class NowPaymentsSDK {
   async refreshPaymentEstimate(paymentId) {
     const id = validatePaymentId(paymentId);
     const response = await this.raw.updatePaymentEstimate(id);
-    return {
-      paymentId: String(response?.id ?? id),
-      amount: response?.pay_amount == null ? null : Number(response.pay_amount),
-      expiresAt: response?.expiration_estimate_date ? new Date(response.expiration_estimate_date).toISOString() : null
-    };
+    // Normalize as a payment object for a consistent public contract.
+    // The API response is payment-shaped; we ensure payment_id is always set.
+    return normalizePayment({ payment_id: id, ...response });
   }
 
   async getPaymentStatus(paymentId) {
@@ -252,8 +273,21 @@ export class NowPaymentsSDK {
       throw new ValidationError('callback must be a function.', { code: 'INVALID_CALLBACK' });
     }
     const watcher = this.watchPaymentStatus(paymentId, options);
+
+    // 'change' covers every transition that has a known previous status.
     watcher.on('change', callback);
-    watcher.on('terminal', (payment) => callback({ from: watcher.lastStatus, to: payment.status, payment }));
+
+    // 'terminal' is used only when the payment was already in a terminal status
+    // on the very first poll (lastStatus was null, so 'change' was never emitted).
+    // When 'change' fires in the same poll cycle as 'terminal' (status transition
+    // reached a terminal status), _changeEverFired is already true, so we skip
+    // the callback here to avoid double-invoking it.
+    watcher.on('terminal', (payment) => {
+      if (!watcher._changeEverFired) {
+        callback({ from: null, to: payment.status, payment });
+      }
+    });
+
     return () => watcher.stop();
   }
 
@@ -295,10 +329,10 @@ export class NowPaymentsSDK {
       toCurrency: input.payCurrency
     });
 
+    // fiatEquivalent is a numeric value, not a currency code — do not pass input.currency here.
     const minimum = await this.getMinimumPaymentAmount({
       fromCurrency: input.payCurrency,
       toCurrency: input.payoutCurrency,
-      fiatEquivalent: input.currency,
       fixedRate: input.fixedRate ?? input.isFixedRate,
       feePaidByUser: input.feePaidByUser ?? input.isFeePaidByUser
     });

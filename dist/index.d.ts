@@ -123,7 +123,7 @@ export interface MinimumAmountInput {
   toCurrency?: string;
   currencyTo?: string;
   currency_to?: string;
-  fiatEquivalent?: string;
+  fiatEquivalent?: number;
   fixedRate?: boolean;
   feePaidByUser?: boolean;
   isFixedRate?: boolean;
@@ -333,7 +333,10 @@ export interface RawClient {
   authenticate(credentials: { email: string; password: string }): Promise<{ token?: string }>;
   getEstimatedPrice(query: Record<string, unknown>): Promise<unknown>;
   getMinimumPaymentAmount(query: Record<string, unknown>): Promise<unknown>;
+  getCurrencies(query?: Record<string, unknown>): Promise<unknown>;
   getFullCurrencies(): Promise<unknown>;
+  getMerchantCoins(): Promise<unknown>;
+  getBalance(): Promise<unknown>;
   createInvoice(body: Record<string, unknown>): Promise<unknown>;
   createPayment(body: Record<string, unknown>, options?: { originIp?: string }): Promise<unknown>;
   createPaymentByInvoice(body: Record<string, unknown>, options?: { originIp?: string }): Promise<unknown>;
@@ -352,19 +355,23 @@ export class NowPaymentsSDK {
   estimatePrice(input: EstimateInput): Promise<Estimate>;
   getMinimumPaymentAmount(input: MinimumAmountInput): Promise<MinimumAmount>;
   getAvailableCurrencies(options?: { onlyEnabled?: boolean }): Promise<Currency[]>;
+  /** Returns currencies available for fixed-rate payments (GET /v1/currencies?fixed_rate=true). */
+  getFixedRateCurrencies(): Promise<Currency[]>;
+  /** Returns currencies enabled for this merchant account (GET /v1/merchant/coins). */
+  getMerchantCurrencies(): Promise<Currency[]>;
   createInvoice(input: CheckoutInput): Promise<Invoice>;
   createPaymentFromInvoice(input: InvoicePaymentInput): Promise<Payment>;
   createDirectPayment(input: DirectPaymentInput): Promise<Payment>;
   createPayment(input: CheckoutInput): Promise<CheckoutSession>;
   createCheckout(input: CheckoutInput): Promise<CheckoutSession>;
   createHostedCheckout(input: CheckoutInput): Promise<CheckoutSession>;
-  refreshPaymentEstimate(paymentId: string): Promise<{ paymentId: string; amount: number | null; expiresAt: string | null }>;
+  refreshPaymentEstimate(paymentId: string): Promise<Payment>;
   getPaymentStatus(paymentId: string): Promise<Payment>;
   listPayments(query?: PaymentsListQuery): Promise<PaymentsList>;
   watchPaymentStatus(paymentId: string, options?: WatchPaymentStatusOptions): PaymentStatusWatcher;
   onPaymentStatusChange(
     paymentId: string,
-    callback: (event: { from: PaymentStatus; to: PaymentStatus; payment: Payment }) => void,
+    callback: (event: { from: PaymentStatus | null; to: PaymentStatus; payment: Payment }) => void,
     options?: WatchPaymentStatusOptions
   ): () => void;
   verifyWebhookSignature(payload: Record<string, unknown>, signature: string, secret?: string): boolean;

@@ -36,7 +36,8 @@ test('createPayment creates hosted checkout with estimate and min-amount preflig
     }
     if (url.pathname === '/v1/min-amount') {
       assert.equal(url.searchParams.get('currency_from'), 'btc');
-      assert.equal(url.searchParams.get('fiat_equivalent'), 'usd');
+      // fiat_equivalent is NOT sent (it was a bug to pass a currency code here)
+      assert.equal(url.searchParams.has('fiat_equivalent'), false);
       return jsonResponse({ currency_from: 'btc', currency_to: 'btc', min_amount: 0.001, fiat_equivalent: 10 });
     }
     if (url.pathname === '/v1/invoice') {
@@ -177,4 +178,201 @@ test('listPayments uses orderBy, accepts snake-case aliases, and prevents invali
   assert.equal(list.data[0].payment_id, 'pay-1');
   assert.equal(list.items[0].id, 'pay-1');
   assert.equal(list.data[0].status, 'cancelled');
+});
+
+// ─── New tests added during audit ───────────────────────────────────────────
+
+test('createCheckout without payCurrency skips preflight and creates invoice', async () => {
+  const fetch = createMockFetch(({ url, init }) => {
+    // No /v1/estimate or /v1/min-amount calls expected
+    if (url.pathname === '/v1/estimate' || url.pathname === '/v1/min-amount') {
+      throw new Error('preflight should be skipped when payCurrency is omitted');
+    }
+    if (url.pathname === '/v1/invoice') {
+      assert.equal(init.method, 'POST');
+      return jsonResponse({
+        id: 'inv-2',
+        invoice_url: 'https://nowpayments.io/payment/?iid=inv-2',
+        price_amount: '49.99',
+        price_currency: 'usd',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z'
+      }, 201);
+    }
+    throw new Error(`Unexpected route ${url.pathname}`);
+  });
+
+  const sdk = new NowPaymentsSDK({ apiKey: 'test-key', fetch });
+  const checkout = await sdk.createCheckout({ amount: 49.99, currency: 'usd', orderId: 'order-2' });
+
+  assert.equal(checkout.id, 'inv-2');
+  assert.equal(checkout.invoice_url, 'https://nowpayments.io/payment/?iid=inv-2');
+  assert.equal(checkout.estimate, null);
+  assert.equal(checkout.minimum, null);
+  assert.equal(fetch.calls.length, 1); // only /v1/invoice
+});
+
+test('onPaymentStatusChange calls callback exactly once when status transitions to terminal', async () => {
+  // Simulates: waiting -> confirming -> finished
+  // This test drives poll() manually to be independent of intervalMs clamping and timers.
+  // Expected callback calls: 2 (pending->processing, processing->paid), NOT 3.
+  const { PaymentStatusWatcher } = await import('../src/watcher.js');
+
+  const statusSequence = ['waiting', 'confirming', 'finished'];
+  let pollCount = 0;
+
+  const fetch = createMockFetch(({ url }) => {
+    if (url.pathname.startsWith('/v1/payment/')) {
+      const status = statusSequence[Math.min(pollCount++, statusSequence.length - 1)];
+      return jsonResponse({ payment_id: 'pay-watch', payment_status: status });
+    }
+    throw new Error(`Unexpected route ${url.pathname}`);
+  });
+
+  const sdk = new NowPaymentsSDK({ apiKey: 'test-key', fetch });
+  const callbackEvents = [];
+  const watcher = new PaymentStatusWatcher({ sdk, paymentId: 'pay-watch' });
+
+  watcher.on('change', (event) => callbackEvents.push(event));
+  watcher.on('terminal', (payment) => {
+    // Must NOT push here — 'change' already fired for this transition.
+    if (!watcher._changeEverFired) {
+      callbackEvents.push({ from: null, to: payment.status, payment });
+    }
+  });
+
+  // Drive polls manually: no setInterval involved.
+  await watcher.poll(); // status: waiting  → lastStatus=pending, no change (was null)
+  await watcher.poll(); // status: confirming → change(pending→processing)
+  await watcher.poll(); // status: finished  → change(processing→paid) + terminal
+
+  assert.equal(callbackEvents.length, 2, 'callback must fire exactly twice: pending→processing and processing→paid');
+  assert.equal(callbackEvents[0].from, 'pending');
+  assert.equal(callbackEvents[0].to, 'processing');
+  assert.equal(callbackEvents[1].from, 'processing');
+  assert.equal(callbackEvents[1].to, 'paid');
+});
+
+test('onPaymentStatusChange fires once when first poll is already terminal', async () => {
+  // Payment is already 'finished' on the very first poll — no previous status.
+  // Callback should fire exactly once via 'terminal', with from: null.
+  const fetch = createMockFetch(({ url }) => {
+    if (url.pathname.startsWith('/v1/payment/')) {
+      return jsonResponse({ payment_id: 'pay-done', payment_status: 'finished' });
+    }
+    throw new Error(`Unexpected route ${url.pathname}`);
+  });
+
+  const sdk = new NowPaymentsSDK({ apiKey: 'test-key', fetch });
+  const callbackEvents = [];
+
+  const unsubscribe = sdk.onPaymentStatusChange(
+    'pay-done',
+    (event) => callbackEvents.push(event),
+    { intervalMs: 1 }
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  unsubscribe();
+
+  assert.equal(callbackEvents.length, 1, 'callback must fire exactly once for first-poll terminal');
+  assert.equal(callbackEvents[0].from, null);
+  assert.equal(callbackEvents[0].to, 'paid');
+});
+
+test('parseWebhook throws ValidationError on invalid signature', () => {
+  const sdk = new NowPaymentsSDK({ ipnSecret: 'real-secret' });
+  const payload = { payment_id: '123', payment_status: 'finished' };
+  assert.throws(
+    () => sdk.parseWebhook(payload, 'bad-signature'),
+    (error) => error.name === 'ValidationError' && error.code === 'INVALID_WEBHOOK_SIGNATURE'
+  );
+});
+
+test('parseWebhook returns normalized payment event with verify:false', () => {
+  const sdk = new NowPaymentsSDK({ ipnSecret: 'secret' });
+  const payload = { payment_id: '456', payment_status: 'waiting', pay_currency: 'btc' };
+  const event = sdk.parseWebhook(payload, 'any-sig', { verify: false });
+  assert.equal(event.type, 'payment.status_changed');
+  assert.equal(event.payment.status, 'pending');
+  assert.equal(event.payment.id, '456');
+});
+
+test('APIError is thrown on non-2xx response', async () => {
+  const fetch = createMockFetch(() =>
+    jsonResponse({ message: 'Unauthorized', code: 401 }, 401)
+  );
+
+  const sdk = new NowPaymentsSDK({ apiKey: 'test-key', fetch });
+  await assert.rejects(
+    () => sdk.getApiStatus(),
+    (error) => error.name === 'APIError' && error.httpStatus === 401
+  );
+});
+
+test('NetworkError is thrown on fetch failure', async () => {
+  const brokenFetch = async () => { throw new TypeError('Failed to fetch'); };
+  const sdk = new NowPaymentsSDK({ apiKey: 'test-key', fetch: brokenFetch });
+  await assert.rejects(
+    () => sdk.estimatePrice({ amount: 1, fromCurrency: 'usd', toCurrency: 'btc' }),
+    (error) => error.name === 'NetworkError'
+  );
+});
+
+test('refreshPaymentEstimate returns a normalized payment object', async () => {
+  const fetch = createMockFetch(({ url }) => {
+    if (url.pathname === '/v1/payment/pay-99/update-merchant-estimate') {
+      return jsonResponse({
+        id: 'pay-99',
+        pay_amount: 0.005,
+        expiration_estimate_date: '2026-01-01T01:00:00.000Z',
+        payment_status: 'waiting'
+      });
+    }
+    throw new Error(`Unexpected route ${url.pathname}`);
+  });
+
+  const sdk = new NowPaymentsSDK({ apiKey: 'test-key', fetch });
+  const result = await sdk.refreshPaymentEstimate('pay-99');
+  assert.equal(result.payment_id, 'pay-99');
+  assert.equal(result.status, 'pending');
+  assert.equal(typeof result.pay_amount, 'number');
+});
+
+test('getAvailableCurrencies filters out currencies where enabled is null', async () => {
+  const fetch = createMockFetch(() =>
+    jsonResponse({
+      currencies: [
+        { code: 'btc', enable: true },
+        { code: 'trx', enable: false },
+        { code: 'eth' } // enable missing → null
+      ]
+    })
+  );
+
+  const sdk = new NowPaymentsSDK({ apiKey: 'test-key', fetch });
+  const currencies = await sdk.getAvailableCurrencies();
+  assert.equal(currencies.length, 1);
+  assert.equal(currencies[0].code, 'btc');
+});
+
+test('preflightPayment does not send fiatEquivalent as a currency code', async () => {
+  const fetch = createMockFetch(({ url }) => {
+    if (url.pathname === '/v1/estimate') {
+      return jsonResponse({ currency_from: 'usd', amount_from: 50, currency_to: 'eth', estimated_amount: 0.02 });
+    }
+    if (url.pathname === '/v1/min-amount') {
+      // fiat_equivalent must NOT be 'usd' (string code) — it should be absent or numeric
+      const fiatEquivalent = url.searchParams.get('fiat_equivalent');
+      assert.notEqual(fiatEquivalent, 'usd', 'fiatEquivalent must not be a currency code string');
+      return jsonResponse({ currency_from: 'eth', min_amount: 0.001 });
+    }
+    if (url.pathname === '/v1/invoice') {
+      return jsonResponse({ id: 'inv-ok', invoice_url: 'https://nowpayments.io/payment/?iid=inv-ok', price_amount: '50', price_currency: 'usd' }, 201);
+    }
+    throw new Error(`Unexpected route ${url.pathname}`);
+  });
+
+  const sdk = new NowPaymentsSDK({ apiKey: 'test-key', fetch });
+  await sdk.createCheckout({ amount: 50, currency: 'usd', payCurrency: 'eth' });
 });

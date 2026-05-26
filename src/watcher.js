@@ -13,6 +13,10 @@ export class PaymentStatusWatcher extends EventEmitter {
     this.timeoutTimer = null;
     this.stopped = false;
     this.lastStatus = null;
+    // Tracks whether a 'change' event has ever been emitted for this watcher.
+    // Used by onPaymentStatusChange to avoid double-invoking the callback when
+    // 'change' and 'terminal' fire in the same poll cycle.
+    this._changeEverFired = false;
   }
 
   start() {
@@ -46,6 +50,7 @@ export class PaymentStatusWatcher extends EventEmitter {
 
       this.emit('status', payment);
       if (this.lastStatus && this.lastStatus !== payment.status) {
+        this._changeEverFired = true;
         this.emit('change', { from: this.lastStatus, to: payment.status, payment });
       }
       this.lastStatus = payment.status;
