@@ -18,7 +18,8 @@ import {
   validateEstimateInput,
   validateInvoicePaymentInput,
   validateMinimumInput,
-  validatePaymentId
+  validatePaymentId,
+  validatePaymentsListQuery
 } from './validators.js';
 
 function toApiBoolean(value) {
@@ -30,13 +31,13 @@ function checkoutToInvoicePayload(input) {
   return compactObject({
     price_amount: input.amount,
     price_currency: input.currency,
-    pay_currency: input.payCurrency,
-    order_id: input.orderId,
-    order_description: input.description ?? input.orderDescription,
-    ipn_callback_url: input.ipnCallbackUrl,
-    success_url: input.successUrl,
-    cancel_url: input.cancelUrl,
-    partially_paid_url: input.partiallyPaidUrl,
+    pay_currency: input.payCurrency ?? input.pay_currency,
+    order_id: input.orderId ?? input.order_id,
+    order_description: input.description ?? input.orderDescription ?? input.order_description,
+    ipn_callback_url: input.ipnCallbackUrl ?? input.ipn_callback_url,
+    success_url: input.successUrl ?? input.success_url,
+    cancel_url: input.cancelUrl ?? input.cancel_url,
+    partially_paid_url: input.partiallyPaidUrl ?? input.partially_paid_url,
     is_fixed_rate: toApiBoolean(input.fixedRate ?? input.isFixedRate),
     is_fee_paid_by_user: toApiBoolean(input.feePaidByUser ?? input.isFeePaidByUser)
   });
@@ -46,14 +47,14 @@ function directPaymentPayload(input) {
   return compactObject({
     price_amount: input.amount,
     price_currency: input.currency,
-    pay_amount: input.payAmount,
-    pay_currency: input.payCurrency,
-    ipn_callback_url: input.ipnCallbackUrl,
-    order_id: input.orderId,
-    order_description: input.description ?? input.orderDescription,
-    payout_address: input.payoutAddress,
-    payout_currency: input.payoutCurrency,
-    payout_extra_id: input.payoutExtraId,
+    pay_amount: input.payAmount ?? input.pay_amount,
+    pay_currency: input.payCurrency ?? input.pay_currency,
+    ipn_callback_url: input.ipnCallbackUrl ?? input.ipn_callback_url,
+    order_id: input.orderId ?? input.order_id,
+    order_description: input.description ?? input.orderDescription ?? input.order_description,
+    payout_address: input.payoutAddress ?? input.payout_address,
+    payout_currency: input.payoutCurrency ?? input.payout_currency,
+    payout_extra_id: input.payoutExtraId ?? input.payout_extra_id,
     is_fixed_rate: toApiBoolean(input.fixedRate ?? input.isFixedRate),
     is_fee_paid_by_user: toApiBoolean(input.feePaidByUser ?? input.isFeePaidByUser)
   });
@@ -62,13 +63,13 @@ function directPaymentPayload(input) {
 function invoicePaymentPayload(input) {
   return compactObject({
     iid: input.invoiceId,
-    pay_currency: input.payCurrency,
-    purchase_id: input.purchaseId,
-    order_description: input.description ?? input.orderDescription,
-    customer_email: input.customerEmail,
-    payout_address: input.payoutAddress,
-    payout_extra_id: input.payoutExtraId,
-    payout_currency: input.payoutCurrency
+    pay_currency: input.payCurrency ?? input.pay_currency,
+    purchase_id: input.purchaseId ?? input.purchase_id,
+    order_description: input.description ?? input.orderDescription ?? input.order_description,
+    customer_email: input.customerEmail ?? input.customer_email,
+    payout_address: input.payoutAddress ?? input.payout_address,
+    payout_extra_id: input.payoutExtraId ?? input.payout_extra_id,
+    payout_currency: input.payoutCurrency ?? input.payout_currency
   });
 }
 
@@ -237,15 +238,7 @@ export class NowPaymentsSDK {
   }
 
   async listPayments(query = {}) {
-    const response = await this.raw.listPayments(compactObject({
-      limit: query.limit,
-      page: query.page,
-      sortBy: query.sortBy,
-      orderBy: query.orderBy,
-      dateFrom: query.dateFrom,
-      dateTo: query.dateTo,
-      invoiceId: query.invoiceId
-    }));
+    const response = await this.raw.listPayments(validatePaymentsListQuery(query));
     return normalizePaymentsList(response);
   }
 
@@ -281,13 +274,13 @@ export class NowPaymentsSDK {
     return normalizeWebhook(payload);
   }
 
-  applyDefaults(input) {
+  applyDefaults(input = {}) {
     return {
       ...input,
-      ipnCallbackUrl: input.ipnCallbackUrl ?? this.defaultIpnCallbackUrl,
-      successUrl: input.successUrl ?? this.defaultSuccessUrl,
-      cancelUrl: input.cancelUrl ?? this.defaultCancelUrl,
-      partiallyPaidUrl: input.partiallyPaidUrl ?? this.defaultPartiallyPaidUrl
+      ipnCallbackUrl: input.ipnCallbackUrl ?? input.ipn_callback_url ?? this.defaultIpnCallbackUrl,
+      successUrl: input.successUrl ?? input.success_url ?? this.defaultSuccessUrl,
+      cancelUrl: input.cancelUrl ?? input.cancel_url ?? this.defaultCancelUrl,
+      partiallyPaidUrl: input.partiallyPaidUrl ?? input.partially_paid_url ?? this.defaultPartiallyPaidUrl
     };
   }
 
@@ -311,15 +304,15 @@ export class NowPaymentsSDK {
     });
 
     if (
-      typeof estimate.amount === 'number' &&
-      typeof minimum.amount === 'number' &&
-      estimate.amount < minimum.amount
+      typeof estimate.estimated_amount === 'number' &&
+      typeof minimum.min_amount === 'number' &&
+      estimate.estimated_amount < minimum.min_amount
     ) {
       throw new ValidationError('Payment amount is below the minimum amount for the selected currency pair.', {
         code: 'BELOW_MINIMUM_PAYMENT_AMOUNT',
         details: {
-          estimatedPayAmount: estimate.amount,
-          minimumPayAmount: minimum.amount,
+          estimatedPayAmount: estimate.estimated_amount,
+          minimumPayAmount: minimum.min_amount,
           payCurrency: input.payCurrency,
           priceAmount: input.amount,
           priceCurrency: input.currency

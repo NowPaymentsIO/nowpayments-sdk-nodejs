@@ -80,10 +80,11 @@ test('createPayment creates hosted checkout with estimate and min-amount preflig
   });
 
   assert.equal(checkout.id, 'inv-1');
+  assert.equal(checkout.invoice_url, 'https://nowpayments.io/payment/?iid=inv-1');
   assert.equal(checkout.checkoutUrl, 'https://nowpayments.io/payment/?iid=inv-1');
-  assert.equal(checkout.status, 'pending');
-  assert.equal(checkout.estimate.amount, 0.01);
-  assert.equal(checkout.minimum.amount, 0.001);
+  assert.equal(checkout.status, undefined);
+  assert.equal(checkout.estimate.estimated_amount, 0.01);
+  assert.equal(checkout.minimum.min_amount, 0.001);
   assert.equal(fetch.calls.length, 3);
 });
 
@@ -151,4 +152,29 @@ test('normalizePaymentStatus exposes stable limited status set', () => {
   assert.equal(normalizePaymentStatus('finished'), 'paid');
   assert.equal(normalizePaymentStatus('partially_paid'), 'partially_paid');
   assert.equal(normalizePaymentStatus('does-not-exist'), 'unknown');
+});
+
+
+test('listPayments uses orderBy, accepts snake-case aliases, and prevents invalid order values', async () => {
+  const fetch = createMockFetch(({ url, init }) => {
+    assert.equal(url.pathname, '/v1/payment/');
+    assert.equal(init.headers.authorization, 'Bearer jwt');
+    assert.equal(url.searchParams.get('limit'), '20');
+    assert.equal(url.searchParams.get('sortBy'), 'created_at');
+    assert.equal(url.searchParams.has('order_by'), false);
+    assert.equal(url.searchParams.has('orderBy'), false);
+    return jsonResponse({
+      data: [{ payment_id: 'pay-1', payment_status: 'cancelled' }],
+      limit: 20,
+      page: 0,
+      pagesCount: 1,
+      total: 1
+    });
+  });
+
+  const sdk = new NowPaymentsSDK({ apiKey: 'test-key', jwtToken: 'jwt', fetch });
+  const list = await sdk.listPayments({ limit: 20, order_by: 'created_at' });
+  assert.equal(list.data[0].payment_id, 'pay-1');
+  assert.equal(list.items[0].id, 'pay-1');
+  assert.equal(list.data[0].status, 'cancelled');
 });

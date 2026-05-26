@@ -8,6 +8,7 @@ export type PaymentStatus =
   | 'failed'
   | 'refunded'
   | 'expired'
+  | 'cancelled'
   | 'unknown';
 
 export interface SDKErrorJSON {
@@ -47,7 +48,7 @@ export function isSDKError(error: unknown): error is SDKError;
 export function toSDKError(error: unknown): SDKError;
 
 export interface NowPaymentsSDKOptions {
-  apiKey: string;
+  apiKey?: string;
   ipnSecret?: string;
   jwtToken?: string;
   token?: string;
@@ -64,17 +65,29 @@ export interface NowPaymentsSDKOptions {
 }
 
 export interface CheckoutInput {
-  amount: number;
-  currency: string;
+  amount?: number;
+  priceAmount?: number;
+  price_amount?: number;
+  currency?: string;
+  priceCurrency?: string;
+  price_currency?: string;
   payCurrency?: string;
+  pay_currency?: string;
   payoutCurrency?: string;
+  payout_currency?: string;
   orderId?: string;
+  order_id?: string;
   description?: string;
   orderDescription?: string;
+  order_description?: string;
   ipnCallbackUrl?: string;
+  ipn_callback_url?: string;
   successUrl?: string;
+  success_url?: string;
   cancelUrl?: string;
+  cancel_url?: string;
   partiallyPaidUrl?: string;
+  partially_paid_url?: string;
   fixedRate?: boolean;
   feePaidByUser?: boolean;
   isFixedRate?: boolean;
@@ -85,8 +98,11 @@ export interface CheckoutInput {
 export interface DirectPaymentInput extends CheckoutInput {
   payCurrency: string;
   payAmount?: number;
+  pay_amount?: number;
   payoutAddress?: string;
+  payout_address?: string;
   payoutExtraId?: string | null;
+  payout_extra_id?: string | null;
   originIp?: string;
 }
 
@@ -94,15 +110,19 @@ export interface EstimateInput {
   amount: number;
   fromCurrency?: string;
   currencyFrom?: string;
+  currency_from?: string;
   toCurrency?: string;
   currencyTo?: string;
+  currency_to?: string;
 }
 
 export interface MinimumAmountInput {
   fromCurrency?: string;
   currencyFrom?: string;
+  currency_from?: string;
   toCurrency?: string;
   currencyTo?: string;
+  currency_to?: string;
   fiatEquivalent?: string;
   fixedRate?: boolean;
   feePaidByUser?: boolean;
@@ -111,57 +131,78 @@ export interface MinimumAmountInput {
 }
 
 export interface InvoicePaymentInput {
-  invoiceId: string;
+  invoiceId?: string;
   iid?: string;
-  payCurrency: string;
+  payCurrency?: string;
+  pay_currency?: string;
   purchaseId?: string;
+  purchase_id?: string;
   description?: string;
   orderDescription?: string;
+  order_description?: string;
   customerEmail?: string;
+  customer_email?: string;
   payoutAddress?: string;
+  payout_address?: string;
   payoutExtraId?: string | null;
+  payout_extra_id?: string | null;
   payoutCurrency?: string;
+  payout_currency?: string;
   originIp?: string;
 }
 
 export interface Estimate {
-  amount: number | null;
-  from: {
-    amount: number | null;
-    currency: string | null;
-  };
-  to: {
-    currency: string | null;
-  };
+  currency_from: string | null;
+  amount_from: number | null;
+  currency_to: string | null;
+  estimated_amount: number | null;
+  fromCurrency: string | null;
+  amountFrom: number | null;
+  toCurrency: string | null;
+  estimatedAmount: number | null;
+  from: { amount: number | null; currency: string | null };
+  to: { amount: number | null; currency: string | null };
 }
 
 export interface MinimumAmount {
-  amount: number | null;
+  currency_from: string | null;
+  currency_to: string | null;
+  min_amount: number | null;
+  fiat_equivalent: number | null;
   fromCurrency: string | null;
   toCurrency: string | null;
+  minAmount: number | null;
+  amount: number | null;
   fiatEquivalent: number | null;
 }
 
 export interface Invoice {
   id: string | null;
+  token_id?: string | null;
+  order_id?: string | null;
+  order_description?: string | null;
+  price_amount?: number | null;
+  price_currency?: string | null;
+  pay_currency?: string | null;
+  ipn_callback_url?: string | null;
+  invoice_url?: string | null;
+  success_url?: string | null;
+  cancel_url?: string | null;
+  partially_paid_url?: string | null;
+  payout_currency?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  is_fixed_rate?: boolean | null;
+  is_fee_paid_by_user?: boolean | null;
+
+  /** Convenience aliases. They are non-enumerable at runtime, so JSON output remains close to the API body. */
   checkoutUrl: string | null;
-  amount: {
-    value: number | null;
-    currency: string | null;
-  };
+  invoiceUrl: string | null;
+  amount: { value: number | null; currency: string | null };
   paymentCurrency: string | null;
-  order: {
-    id: string | null;
-    description: string | null;
-  };
-  redirects: {
-    successUrl: string | null;
-    cancelUrl: string | null;
-    partiallyPaidUrl: string | null;
-  };
-  callbacks: {
-    ipnUrl: string | null;
-  };
+  order: { id: string | null; description: string | null };
+  redirects: { successUrl: string | null; cancelUrl: string | null; partiallyPaidUrl: string | null };
+  callbacks: { ipnUrl: string | null };
   fixedRate: boolean | null;
   feePaidByUser: boolean | null;
   createdAt: string | null;
@@ -169,32 +210,52 @@ export interface Invoice {
 }
 
 export interface Payment {
+  payment_id: string | null;
+  invoice_id: string | null;
+  payment_status: string | null;
+  status: PaymentStatus;
+  pay_address: string | null;
+  payin_extra_id: string | null;
+  price_amount: number | null;
+  price_currency: string | null;
+  pay_amount: number | null;
+  actually_paid: number | null;
+  actually_paid_at_fiat: number | null;
+  pay_currency: string | null;
+  order_id: string | null;
+  order_description: string | null;
+  purchase_id: string | null;
+  outcome_amount: number | null;
+  outcome_currency: string | null;
+  ipn_callback_url: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  valid_until: string | null;
+  expiration_estimate_date: string | null;
+  amount_received: number | null;
+  payin_hash: string | null;
+  payout_hash: string | null;
+  smart_contract: string | null;
+  network: string | null;
+  network_precision: number | null;
+  time_limit: string | null;
+  burning_percent: string | null;
+  type: string | null;
+  parent_payment_id: string | null;
+  origin_type: string | null;
+  payment_extra_ids: Array<string | null> | null;
+  fee: unknown | null;
+  redirectData: unknown | null;
+
+  /** Convenience aliases. They are non-enumerable at runtime. */
   id: string | null;
   invoiceId: string | null;
-  status: PaymentStatus;
-  deposit: {
-    address: string | null;
-    memo: string | null;
-    network: string | null;
-    precision: number | null;
-  };
-  price: {
-    amount: number | null;
-    currency: string | null;
-  };
-  payment: {
-    amount: number | null;
-    currency: string | null;
-    actuallyPaid: number | null;
-  };
-  outcome: {
-    amount: number | null;
-    currency: string | null;
-  };
-  order: {
-    id: string | null;
-    description: string | null;
-  };
+  rawStatus: string | null;
+  deposit: { address: string | null; memo: string | null; network: string | null; precision: number | null };
+  price: { amount: number | null; currency: string | null };
+  payment: { amount: number | null; currency: string | null; actuallyPaid: number | null };
+  outcome: { amount: number | null; currency: string | null };
+  order: { id: string | null; description: string | null };
   purchaseId: string | null;
   callbackUrl: string | null;
   expiresAt: string | null;
@@ -204,29 +265,28 @@ export interface Payment {
   minimum?: MinimumAmount | null;
 }
 
-export interface CheckoutSession {
-  id: string | null;
-  checkoutUrl: string | null;
-  status: 'pending';
-  invoice: Invoice;
-  payment: Payment | null;
+export interface CheckoutSession extends Invoice {
   estimate: Estimate | null;
   minimum: MinimumAmount | null;
-  createdAt: string | null;
-  updatedAt: string | null;
 }
 
 export interface PaymentsListQuery {
   limit?: number;
   page?: number;
   sortBy?: string;
-  orderBy?: 'asc' | 'desc';
+  sort_by?: string;
+  orderBy?: 'asc' | 'desc' | string;
+  order_by?: 'asc' | 'desc' | string;
   dateFrom?: string;
+  date_from?: string;
   dateTo?: string;
+  date_to?: string;
   invoiceId?: string | number;
+  invoice_id?: string | number;
 }
 
 export interface PaymentsList {
+  data: Payment[];
   items: Payment[];
   page: number | null;
   limit: number | null;
@@ -235,10 +295,19 @@ export interface PaymentsList {
 }
 
 export interface Currency {
+  id?: string | number | null;
   code: string;
   name: string | null;
-  enabled: boolean | null;
+  enable: boolean | null;
   network: string | null;
+  extra_id_exists: boolean | null;
+  logo_url: string | null;
+  track?: boolean | null;
+  cg_id?: string | null;
+  is_maxlimit?: boolean | null;
+  smart_contract?: string | null;
+  network_precision?: number | null;
+  enabled: boolean | null;
   requiresExtraId: boolean | null;
   logoUrl: string | null;
 }
@@ -275,7 +344,8 @@ export interface RawClient {
 
 export class NowPaymentsSDK {
   raw: RawClient;
-  constructor(options: NowPaymentsSDKOptions);
+  jwtToken: string | null;
+  constructor(options?: NowPaymentsSDKOptions);
   setJwtToken(token: string | null): this;
   getApiStatus(): Promise<unknown>;
   authenticate(credentials?: { email?: string; password?: string }): Promise<string | null>;
@@ -318,6 +388,7 @@ export const SDK_PAYMENT_STATUSES: Readonly<{
   FAILED: 'failed';
   REFUNDED: 'refunded';
   EXPIRED: 'expired';
+  CANCELLED: 'cancelled';
   UNKNOWN: 'unknown';
 }>;
 export const TERMINAL_PAYMENT_STATUSES: readonly PaymentStatus[];

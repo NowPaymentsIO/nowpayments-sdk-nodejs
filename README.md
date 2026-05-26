@@ -1,20 +1,19 @@
 # NOWPayments Node.js SDK
 
-Scenario-first SDK for accepting crypto payments via NOWPayments hosted checkout.
+Scenario-first SDK for accepting crypto payments with NOWPayments from Node.js.
 
-This package is built around the integration scenario from the technical brief: initialize SDK, create payment, get checkout URL, redirect customer, then track payment status. The SDK hides the orchestration of the public API calls where it can: estimate, minimum amount check, invoice/payment creation, normalization, status mapping, events, and consistent errors.
+The main SDK scenario is: initialize SDK -> create hosted checkout -> redirect the customer -> receive IPN/webhook status updates or poll payment status. The SDK still keeps the response bodies close to the public NOWPayments API shape, so `invoice_url`, `payment_id`, `payment_status`, `pay_address`, `pay_amount`, `orderBy`, and other familiar fields stay recognizable.
 
 ## Features
 
-- Node.js >= 18, no runtime dependencies.
-- ESM package with TypeScript declarations.
-- Scenario API: `createPayment()` returns a hosted checkout URL.
-- Direct API-compatible flow: `createDirectPayment()` returns deposit address data.
-- Normalized public contract for payments, invoices, estimates, currencies, and payment lists.
-- Stable SDK statuses: `pending`, `processing`, `paid`, `partially_paid`, `failed`, `refunded`, `expired`, `unknown`.
-- Polling-based event model for payment status changes.
-- IPN webhook signature verification with HMAC SHA-512 and recursively sorted payload keys.
-- Consistent errors: `configuration`, `validation`, `network`, `timeout`, `api`, `unknown`.
+- Node.js >= 18, ESM, no runtime dependencies.
+- Hosted checkout flow through `createCheckout()` / `createPayment()`.
+- Direct payment flow through `createDirectPayment()` for in-page deposit address UI.
+- API-shaped responses with non-enumerable convenience aliases such as `checkout.checkoutUrl` and `payment.id`.
+- Stable SDK payment statuses: `pending`, `processing`, `paid`, `partially_paid`, `failed`, `refunded`, `expired`, `cancelled`, `unknown`.
+- Payment status polling events.
+- IPN/webhook signature verification with HMAC SHA-512 and recursively sorted payload keys.
+- Consistent `configuration`, `validation`, `network`, `timeout`, `api`, and `unknown` errors.
 
 ## Installation
 
@@ -30,6 +29,8 @@ npm install /path/to/nowpayments-node-sdk
 
 ## Quick start: hosted checkout
 
+Use this when you want to redirect the customer to NOWPayments hosted checkout.
+
 ```js
 import { NowPaymentsSDK } from '@nowpayments-sdk/node';
 
@@ -41,7 +42,7 @@ const sdk = new NowPaymentsSDK({
   cancelUrl: 'https://example.com/payment/cancel'
 });
 
-const checkout = await sdk.createPayment({
+const checkout = await sdk.createCheckout({
   amount: 49.99,
   currency: 'usd',
   payCurrency: 'btc',
@@ -49,23 +50,58 @@ const checkout = await sdk.createPayment({
   description: 'Demo order'
 });
 
-// Redirect the customer to hosted checkout.
-console.log(checkout.checkoutUrl);
+console.log(checkout.id);          // invoice id
+console.log(checkout.invoice_url); // redirect user to this URL
 ```
 
-When `payCurrency` is provided, `createPayment()` performs a preflight flow:
+`createPayment(input)` is kept as an alias for `createCheckout(input)` because the SDK scenario is “create a payment for the customer”. Under the hood, hosted checkout is created by NOWPayments `POST /v1/invoice`, so the returned body is invoice-shaped and does not include a payment status. A real payment appears after the customer opens the invoice and chooses/sends funds; track that payment by IPN/webhook or payment status endpoints.
+
+When `payCurrency` is provided, `createCheckout()` performs preflight:
 
 1. `GET /v1/estimate`
 2. `GET /v1/min-amount`
-3. throws `ValidationError` if estimated pay amount is below minimum
+3. throws `ValidationError` if `estimate.estimated_amount` is below `minimum.min_amount`
 4. `POST /v1/invoice`
-5. returns a normalized `CheckoutSession` with `checkoutUrl`
+5. returns an invoice-shaped checkout object
 
-When `payCurrency` is not provided, NOWPayments hosted checkout can let the customer choose the currency on the invoice page, so the SDK skips estimate/minimum preflight and creates the invoice directly.
+Example response shape:
+
+```js
+{
+  id: '4522625843',
+  order_id: 'order-1001',
+  order_description: 'Demo order',
+  price_amount: 49.99,
+  price_currency: 'usd',
+  pay_currency: 'btc',
+  ipn_callback_url: 'https://example.com/webhooks/nowpayments',
+  invoice_url: 'https://nowpayments.io/payment/?iid=4522625843',
+  success_url: 'https://example.com/payment/success',
+  cancel_url: 'https://example.com/payment/cancel',
+  created_at: '2026-01-01T00:00:00.000Z',
+  updated_at: '2026-01-01T00:00:00.000Z',
+  estimate: {
+    currency_from: 'usd',
+    amount_from: 49.99,
+    currency_to: 'btc',
+    estimated_amount: 0.00042
+  },
+  minimum: {
+    currency_from: 'btc',
+    currency_to: 'btc',
+    min_amount: 0.0001,
+    fiat_equivalent: 12.34
+  }
+}
+```
+
+`estimate.estimated_amount` is the amount in `estimate.currency_to`. `estimate.amount_from` is the original amount in `estimate.currency_from`.
+
+When `payCurrency` is not provided, NOWPayments lets the customer choose a payment currency on the invoice page, so estimate/minimum preflight is skipped.
 
 ## Direct payment flow
 
-Use this when you want to show a deposit address inside your own UI instead of redirecting to hosted checkout.
+Use this when you want to show the deposit address in your own UI instead of redirecting to hosted checkout.
 
 ```js
 const payment = await sdk.createDirectPayment({
@@ -76,29 +112,118 @@ const payment = await sdk.createDirectPayment({
   ipnCallbackUrl: 'https://example.com/webhooks/nowpayments'
 });
 
-console.log(payment.deposit.address);
-console.log(payment.deposit.memo); // may be required for some currencies
+console.log(payment.payment_id);   // API field
+console.log(payment.id);           // convenience alias
+console.log(payment.pay_address);  // API field
+console.log(payment.deposit.memo); // may be required for XRP/XLM/etc.
 ```
 
-## Status tracking
+## Authentication
 
-### Single status request
+`POST /v1/auth` does not require an API key. It requires dashboard email and password and returns a short-lived JWT token.
+
+```js
+const authSdk = new NowPaymentsSDK({
+  email: process.env.NOWPAYMENTS_EMAIL,
+  password: process.env.NOWPAYMENTS_PASSWORD
+});
+
+const token = await authSdk.authenticate();
+console.log(token);
+console.log(authSdk.jwtToken);
+```
+
+## List payments
+
+`GET /v1/payment/` requires both `x-api-key` and Bearer JWT. You can pass a JWT directly:
+
+```js
+const sdk = new NowPaymentsSDK({
+  apiKey: process.env.NOWPAYMENTS_API_KEY,
+  jwtToken: process.env.NOWPAYMENTS_JWT_TOKEN
+});
+
+const payments = await sdk.listPayments({
+  limit: 20,
+  page: 0,
+  sortBy: 'created_at',
+  orderBy: 'desc'
+});
+
+console.log(payments.data);
+```
+
+Or authenticate first and then reuse the token:
+
+```js
+const authSdk = new NowPaymentsSDK({
+  email: process.env.NOWPAYMENTS_EMAIL,
+  password: process.env.NOWPAYMENTS_PASSWORD
+});
+
+await authSdk.authenticate();
+
+const sdk = new NowPaymentsSDK({
+  apiKey: process.env.NOWPAYMENTS_API_KEY,
+  jwtToken: authSdk.jwtToken
+});
+
+const payments = await sdk.listPayments({ limit: 20, sortBy: 'created_at', orderBy: 'desc' });
+```
+
+`sortBy` is the field, for example `created_at` or `payment_id`. `orderBy` is only `asc` or `desc`. The SDK also accepts snake-case aliases such as `order_by`, but sends the NOWPayments query parameter as `orderBy` to avoid `Invalid order_by value` API errors.
+
+## Webhooks / IPN
+
+Use IPN/webhooks when you need automatic payment status updates without polling.
+
+When creating a hosted checkout or direct payment, pass `ipnCallbackUrl`:
+
+```js
+const checkout = await sdk.createCheckout({
+  amount: 49.99,
+  currency: 'usd',
+  payCurrency: 'btc',
+  orderId: 'order-1001',
+  ipnCallbackUrl: 'https://example.com/webhooks/nowpayments'
+});
+```
+
+When the payment status changes, NOWPayments sends a `POST` request to that URL. The request body is similar to `GET /v1/payment/{payment_id}` and the signature is in the `x-nowpayments-sig` header. Your server should verify the signature and then update the order in your database.
+
+```js
+const event = sdk.parseWebhook(req.body, req.headers['x-nowpayments-sig']);
+
+if (event.type === 'payment.status_changed') {
+  const payment = event.payment;
+  console.log(payment.payment_id, payment.status, payment.payment_status);
+  // Update order by payment.order_id / payment.purchase_id here.
+}
+```
+
+Manual signature verification:
+
+```js
+const isValid = sdk.verifyWebhookSignature(
+  req.body,
+  req.headers['x-nowpayments-sig']
+);
+```
+
+The SDK signs `JSON.stringify(sortObjectDeep(payload))` using HMAC SHA-512, matching the NOWPayments IPN format.
+
+## Status tracking by polling
 
 ```js
 const payment = await sdk.getPaymentStatus('5745459419');
-console.log(payment.status); // pending | processing | paid | partially_paid | failed | refunded | expired | unknown
+console.log(payment.payment_status); // raw API status, e.g. waiting
+console.log(payment.status);         // SDK status, e.g. pending
 ```
-
-### Event model by polling
 
 ```js
 const watcher = sdk.watchPaymentStatus('5745459419', {
   intervalMs: 5000,
   timeoutMs: 15 * 60 * 1000
-});
-
-watcher.on('status', (payment) => {
-  console.log('current status:', payment.status);
 });
 
 watcher.on('change', ({ from, to, payment }) => {
@@ -110,31 +235,7 @@ watcher.on('terminal', (payment) => {
 });
 
 watcher.on('error', console.error);
-
-// watcher.stop();
 ```
-
-## Webhooks / IPN
-
-```js
-const event = sdk.parseWebhook(req.body, req.headers['x-nowpayments-sig']);
-
-if (event.type === 'payment.status_changed') {
-  const payment = event.payment;
-  console.log(payment.id, payment.status);
-}
-```
-
-For frameworks where you need manual verification:
-
-```js
-const isValid = sdk.verifyWebhookSignature(
-  req.body,
-  req.headers['x-nowpayments-sig']
-);
-```
-
-The SDK signs `JSON.stringify(sortObjectDeep(payload))` using HMAC SHA-512, matching the NOWPayments IPN format.
 
 ## Public API
 
@@ -142,14 +243,15 @@ The SDK signs `JSON.stringify(sortObjectDeep(payload))` using HMAC SHA-512, matc
 
 | Method | Description |
 | --- | --- |
-| `createPayment(input)` | Creates hosted checkout session. Alias for `createCheckout(input)`. |
-| `createCheckout(input)` | Creates hosted checkout session and returns `checkoutUrl`. |
+| `createCheckout(input)` | Creates hosted checkout by creating a NOWPayments invoice and returns `invoice_url`. |
+| `createPayment(input)` | Alias for `createCheckout(input)` for the high-level SDK scenario. |
 | `createHostedCheckout(input)` | Alias for `createCheckout(input)`. |
+| `createDirectPayment(input)` | Calls `POST /v1/payment` and returns deposit address/payment data. |
 | `watchPaymentStatus(paymentId, options)` | Starts polling and emits `status`, `change`, `terminal`, `timeout`, `error`. |
 | `onPaymentStatusChange(paymentId, callback, options)` | Convenience subscription returning `unsubscribe()`. |
 | `parseWebhook(payload, signature, options)` | Verifies and normalizes IPN callback. |
 
-### API coverage required by the brief
+### Endpoint coverage
 
 | SDK method | NOWPayments endpoint |
 | --- | --- |
@@ -163,55 +265,10 @@ The SDK signs `JSON.stringify(sortObjectDeep(payload))` using HMAC SHA-512, matc
 | `createPaymentFromInvoice(input)` | `POST /v1/invoice-payment` |
 | `getAvailableCurrencies(options)` | `GET /v1/full-currencies` |
 
-A `raw` client is also available for controlled escape hatches:
+A `raw` client is available for controlled escape hatches:
 
 ```js
 await sdk.raw.createInvoice({ price_amount: 10, price_currency: 'usd' });
-```
-
-Prefer normalized methods for product integrations because the raw client returns provider-shaped data.
-
-## Normalized objects
-
-### CheckoutSession
-
-```ts
-type CheckoutSession = {
-  id: string | null;
-  checkoutUrl: string | null;
-  status: 'pending';
-  invoice: Invoice;
-  payment: Payment | null;
-  estimate: Estimate | null;
-  minimum: MinimumAmount | null;
-  createdAt: string | null;
-  updatedAt: string | null;
-};
-```
-
-### Payment
-
-```ts
-type Payment = {
-  id: string | null;
-  invoiceId: string | null;
-  status: PaymentStatus;
-  deposit: {
-    address: string | null;
-    memo: string | null;
-    network: string | null;
-    precision: number | null;
-  };
-  price: { amount: number | null; currency: string | null };
-  payment: { amount: number | null; currency: string | null; actuallyPaid: number | null };
-  outcome: { amount: number | null; currency: string | null };
-  order: { id: string | null; description: string | null };
-  purchaseId: string | null;
-  callbackUrl: string | null;
-  expiresAt: string | null;
-  createdAt: string | null;
-  updatedAt: string | null;
-};
 ```
 
 ## Status mapping
@@ -227,6 +284,7 @@ type Payment = {
 | `failed` | `failed` |
 | `refunded` | `refunded` |
 | `expired` | `expired` |
+| `cancelled` / `canceled` | `cancelled` |
 | unknown/empty | `unknown` |
 
 ## Errors
@@ -235,11 +293,11 @@ All SDK errors inherit from `SDKError` and serialize predictably:
 
 ```js
 try {
-  await sdk.createPayment({ amount: 1, currency: 'usd', payCurrency: 'btc' });
+  await sdk.createCheckout({ amount: 1, currency: 'usd', payCurrency: 'btc' });
 } catch (error) {
   if (error.name === 'ValidationError') {
-    console.log(error.type); // validation
-    console.log(error.code); // e.g. BELOW_MINIMUM_PAYMENT_AMOUNT
+    console.log(error.type);    // validation
+    console.log(error.code);    // e.g. BELOW_MINIMUM_PAYMENT_AMOUNT
     console.log(error.details);
   }
 }
@@ -253,31 +311,6 @@ Error types:
 - `timeout` - request timeout.
 - `api` - NOWPayments API returned non-2xx response.
 - `unknown` - unexpected error wrapped by SDK utilities.
-
-## Authentication for payment list
-
-The public OpenAPI marks payment listing as Bearer-authenticated. You can pass a JWT token directly:
-
-```js
-const sdk = new NowPaymentsSDK({
-  apiKey: process.env.NOWPAYMENTS_API_KEY,
-  jwtToken: process.env.NOWPAYMENTS_JWT_TOKEN
-});
-
-const payments = await sdk.listPayments({ limit: 20, page: 0 });
-```
-
-Or configure dashboard credentials and let the SDK request a JWT before Bearer-authenticated calls:
-
-```js
-const sdk = new NowPaymentsSDK({
-  apiKey: process.env.NOWPAYMENTS_API_KEY,
-  email: process.env.NOWPAYMENTS_EMAIL,
-  password: process.env.NOWPAYMENTS_PASSWORD
-});
-
-const token = await sdk.authenticate();
-```
 
 ## Development
 
