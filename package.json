@@ -1,5 +1,5 @@
 {
-  "name": "@nowpayments-sdk/node",
+  "name": "nowpayments-sdk-nodejs",
   "version": "0.2.1",
   "description": "Scenario-first Node.js SDK for NOWPayments hosted checkout and crypto payments.",
   "type": "module",
