@@ -186,8 +186,6 @@ test('listPayments uses orderBy, accepts snake-case aliases, and prevents invali
   assert.equal(list.data[0].status, 'cancelled');
 });
 
-// ─── New tests added during audit ───────────────────────────────────────────
-
 test('createCheckout without payCurrency skips preflight and creates invoice', async () => {
   const fetch = createMockFetch(({ url, init }) => {
     // No /v1/estimate or /v1/min-amount calls expected
