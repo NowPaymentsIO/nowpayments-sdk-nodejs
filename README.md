@@ -18,7 +18,7 @@ The main SDK scenario is: initialize SDK → create hosted checkout → redirect
 ## Installation
 
 ```bash
-npm install @nowpayments-sdk/node
+npm install @nowpaymentsio/nowpayments-sdk-nodejs
 ```
 
 For local development from this archive:
@@ -34,7 +34,7 @@ npm install /path/to/nowpayments-node-sdk
 Use this when you want to redirect the customer to the NOWPayments hosted checkout page.
 
 ```js
-import { NowPaymentsSDK } from '@nowpayments-sdk/node';
+import { NowPaymentsSDK } from '@nowpaymentsio/nowpayments-sdk-nodejs';
 
 const sdk = new NowPaymentsSDK({
   apiKey: process.env.NOWPAYMENTS_API_KEY,
