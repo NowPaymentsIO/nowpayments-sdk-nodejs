@@ -2,8 +2,14 @@
   "name": "@nowpaymentsio/nowpayments-sdk-nodejs",
   "version": "0.2.1",
   "description": "Scenario-first Node.js SDK for NOWPayments hosted checkout and crypto payments.",
-  "repository": "https://github.com/NowPaymentsIO/nowpayments-sdk-nodejs",
   "homepage": "https://github.com/NowPaymentsIO/nowpayments-sdk-nodejs#nowpayments-nodejs-sdk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NowPaymentsIO/nowpayments-sdk-nodejs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NowPaymentsIO/nowpayments-sdk-nodejs/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
