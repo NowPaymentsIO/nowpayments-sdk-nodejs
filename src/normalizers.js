@@ -343,3 +343,205 @@ export function normalizeCurrencies(api) {
   const list = Array.isArray(api?.currencies) ? api.currencies : Array.isArray(api) ? api : [];
   return list.map(normalizeCurrency).filter((currency) => currency.code);
 }
+
+export const SDK_PAYOUT_STATUSES = Object.freeze({
+  PENDING: 'pending',
+  PROCESSING: 'processing',
+  SENDING: 'sending',
+  FINISHED: 'finished',
+  FAILED: 'failed',
+  REJECTED: 'rejected',
+  CANCELLED: 'cancelled',
+  UNKNOWN: 'unknown'
+});
+
+const PAYOUT_STATUS_MAP = Object.freeze({
+  new: SDK_PAYOUT_STATUSES.PENDING,
+  creating: SDK_PAYOUT_STATUSES.PENDING,
+  waiting: SDK_PAYOUT_STATUSES.PENDING,
+  processing: SDK_PAYOUT_STATUSES.PROCESSING,
+  sending: SDK_PAYOUT_STATUSES.SENDING,
+  finished: SDK_PAYOUT_STATUSES.FINISHED,
+  failed: SDK_PAYOUT_STATUSES.FAILED,
+  rejected: SDK_PAYOUT_STATUSES.REJECTED,
+  rejected_not_checked: SDK_PAYOUT_STATUSES.REJECTED,
+  cancelled: SDK_PAYOUT_STATUSES.CANCELLED,
+  canceled: SDK_PAYOUT_STATUSES.CANCELLED
+});
+
+export const TERMINAL_PAYOUT_STATUSES = Object.freeze([
+  SDK_PAYOUT_STATUSES.FINISHED,
+  SDK_PAYOUT_STATUSES.FAILED,
+  SDK_PAYOUT_STATUSES.REJECTED,
+  SDK_PAYOUT_STATUSES.CANCELLED
+]);
+
+export function normalizePayoutStatus(apiStatus) {
+  if (!apiStatus || typeof apiStatus !== 'string') return SDK_PAYOUT_STATUSES.UNKNOWN;
+  return PAYOUT_STATUS_MAP[apiStatus.toLowerCase()] || SDK_PAYOUT_STATUSES.UNKNOWN;
+}
+
+export function normalizeBalance(api = {}) {
+  const balance = {};
+  if (!api || typeof api !== 'object' || Array.isArray(api)) return balance;
+
+  for (const [rawCurrency, rawEntry] of Object.entries(api)) {
+    if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) continue;
+    const currency = String(rawCurrency).toLowerCase();
+    const entry = {
+      amount: toNumberOrNull(rawEntry.amount),
+      pendingAmount: toNumberOrNull(rawEntry.pendingAmount ?? rawEntry.pending_amount)
+    };
+    balance[currency] = withAliases(entry, {
+      currency,
+      available: entry.amount,
+      pending: entry.pendingAmount
+    });
+  }
+
+  return balance;
+}
+
+export function normalizePayoutFee(api = {}, input = {}) {
+  const fee = {
+    currency: toLowerStringOrNull(api.currency ?? input.currency),
+    amount: toNumberOrNull(input.amount ?? api.amount),
+    fee: toNumberOrNull(api.fee)
+  };
+
+  return withAliases(fee, {
+    estimatedFee: fee.fee
+  });
+}
+
+export function normalizeMinimumPayoutAmount(api = {}, currency) {
+  const minimum = {
+    success: api.success == null ? true : Boolean(api.success),
+    currency: toLowerStringOrNull(currency ?? api.currency ?? api.coin),
+    result: toNumberOrNull(api.result ?? api.min_amount)
+  };
+
+  return withAliases(minimum, {
+    amount: minimum.result,
+    minAmount: minimum.result
+  });
+}
+
+export function normalizePayoutAddressValidation(api, input = {}) {
+  const validation = api && typeof api === 'object' && !Array.isArray(api)
+    ? { ...api }
+    : {};
+
+  validation.valid = true;
+  if (validation.address == null) validation.address = toStringOrNull(input.address);
+  if (validation.currency == null) validation.currency = toLowerStringOrNull(input.currency);
+  if (validation.extra_id == null) validation.extra_id = toStringOrNull(input.extraId ?? input.extra_id);
+
+  return withAliases(validation, {
+    extraId: validation.extra_id
+  });
+}
+
+export function normalizePayout(api = {}) {
+  const payoutId = toStringOrNull(api.id ?? api.payout_id);
+  const batchId = toStringOrNull(api.batch_withdrawal_id ?? api.batch_id);
+  const rawStatus = toStringOrNull(api.payout_status ?? api.status);
+  const payout = {
+    id: payoutId,
+    batch_withdrawal_id: batchId,
+    payout_status: rawStatus,
+    status: normalizePayoutStatus(rawStatus),
+    error: api.error ?? null,
+    currency: toLowerStringOrNull(api.currency),
+    amount: toNumberOrNull(api.amount),
+    address: toStringOrNull(api.address),
+    fee: typeof api.fee === 'object' && api.fee !== null ? api.fee : toNumberOrNull(api.fee),
+    extra_id: toStringOrNull(api.extra_id),
+    hash: toStringOrNull(api.hash),
+    ipn_callback_url: toStringOrNull(api.ipn_callback_url),
+    payout_description: toStringOrNull(api.payout_description),
+    unique_external_id: toStringOrNull(api.unique_external_id),
+    fiat_amount: toNumberOrNull(api.fiat_amount),
+    fiat_currency: toLowerStringOrNull(api.fiat_currency),
+    is_request_payouts: toBooleanOrNull(api.is_request_payouts),
+    created_at: normalizeDate(api.created_at ?? api.createdAt),
+    requested_at: normalizeDate(api.requested_at ?? api.requestedAt),
+    updated_at: normalizeDate(api.updated_at ?? api.updatedAt)
+  };
+
+  return withAliases(payout, {
+    payoutId: payout.id,
+    batchId: payout.batch_withdrawal_id,
+    rawStatus: payout.payout_status,
+    extraId: payout.extra_id,
+    callbackUrl: payout.ipn_callback_url,
+    description: payout.payout_description,
+    uniqueExternalId: payout.unique_external_id,
+    fiatAmount: payout.fiat_amount,
+    fiatCurrency: payout.fiat_currency,
+    createdAt: payout.created_at,
+    requestedAt: payout.requested_at,
+    updatedAt: payout.updated_at
+  });
+}
+
+export function normalizePayoutBatch(api = {}, options = {}) {
+  const withdrawals = Array.isArray(api.withdrawals) ? api.withdrawals.map(normalizePayout) : [];
+  const batch = {
+    id: toStringOrNull(api.id ?? api.batch_withdrawal_id ?? api.batch_id),
+    withdrawals,
+    ipn_callback_url: toStringOrNull(api.ipn_callback_url ?? api.ipnCallbackUrl),
+    payout_description: toStringOrNull(api.payout_description ?? api.payoutDescription),
+    preflight: options.preflight ?? null,
+    verified: Boolean(options.verified),
+    requires_verification: Boolean(options.requiresVerification),
+    verification: options.verification ?? null
+  };
+
+  return withAliases(batch, {
+    batchId: batch.id,
+    items: batch.withdrawals,
+    callbackUrl: batch.ipn_callback_url,
+    description: batch.payout_description,
+    requiresVerification: batch.requires_verification
+  });
+}
+
+export function normalizePayoutStatusResponse(api) {
+  if (Array.isArray(api)) return normalizePayout(api[0] ?? {});
+  if (Array.isArray(api?.payouts)) return normalizePayout(api.payouts[0] ?? {});
+  return normalizePayout(api ?? {});
+}
+
+export function normalizePayoutsList(api = {}) {
+  const source = Array.isArray(api) ? api : Array.isArray(api.payouts) ? api.payouts : [];
+  const payouts = source.map(normalizePayout);
+  const list = {
+    payouts,
+    limit: toNumberOrNull(api?.limit),
+    page: toNumberOrNull(api?.page),
+    pagesCount: toNumberOrNull(api?.pagesCount ?? api?.pages_count),
+    total: toNumberOrNull(api?.total)
+  };
+
+  return withAliases(list, {
+    data: list.payouts,
+    items: list.payouts
+  });
+}
+
+export function normalizePayoutVerification(api, batchId) {
+  const verification = api && typeof api === 'object' && !Array.isArray(api)
+    ? { ...api }
+    : { result: api ?? null };
+
+  if (verification.batch_withdrawal_id == null) {
+    verification.batch_withdrawal_id = toStringOrNull(batchId);
+  }
+  if (verification.verified == null) verification.verified = true;
+
+  return withAliases(verification, {
+    batchId: verification.batch_withdrawal_id
+  });
+}
+

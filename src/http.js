@@ -58,7 +58,7 @@ export class HttpClient {
     this.baseUrl = (baseUrl || 'https://api.nowpayments.io').replace(/\/$/, '');
     this.timeoutMs = timeoutMs;
     this.fetchImpl = fetchImpl || globalThis.fetch;
-    this.userAgent = userAgent || '@nowpayments-sdk/node/0.2.1';
+    this.userAgent = userAgent || '@nowpayments-sdk/node/0.3.0';
     this.getJwtToken = getJwtToken;
 
     if (typeof this.fetchImpl !== 'function') {
