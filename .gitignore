@@ -1,2 +1,4 @@
 .env
 .idea
+.env.live
+.nowpayments-live-payout-test-state.json

@@ -21,7 +21,7 @@ function readJson(req) {
   });
 }
 
-// Use this URL as ipnCallbackUrl when creating checkout/payment:
+// Use this URL as ipnCallbackUrl when creating checkout/payment/payout:
 // https://your-domain.com/webhooks/nowpayments
 const server = http.createServer(async (req, res) => {
   if (req.method !== 'POST' || req.url !== '/webhooks/nowpayments') {
@@ -42,6 +42,13 @@ const server = http.createServer(async (req, res) => {
 
       // Update your order in the database here.
       // Usually you match it by payment.order_id, payment.purchase_id, or payment.invoice_id.
+    }
+
+    if (event.type === 'payout.status_changed') {
+      const payout = event.payout;
+      console.log('Payout status:', payout.id, payout.payout_status, '->', payout.status);
+
+      // Usually you match it by payout.id, payout.batchId, or payout.uniqueExternalId.
     }
 
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }));

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { ConfigurationError, ValidationError } from './errors.js';
-import { normalizePayment } from './normalizers.js';
+import { normalizePayment, normalizePayout } from './normalizers.js';
 import { isNonEmptyString } from './validators.js';
 
 export function sortObjectDeep(value) {
@@ -49,6 +49,16 @@ export function normalizeWebhook(payload = {}) {
     return {
       type: 'payment.status_changed',
       payment: normalizePayment(payload)
+    };
+  }
+
+  if (
+    'batch_withdrawal_id' in payload &&
+    ('status' in payload || 'payout_status' in payload)
+  ) {
+    return {
+      type: 'payout.status_changed',
+      payout: normalizePayout(payload)
     };
   }
 
